@@ -2,12 +2,26 @@ pipeline {
     agent any
 
     stages {
+
         stage('Build') {
             steps {
                 echo "⚙️ Installing dependencies for Juice Shop..."
                 sh '''
                 docker run --rm -v $(pwd):/app -w /app node:18 bash -c "npm install"
                 '''
+            }
+        }
+
+        stage('SAST - Semgrep') {
+            steps {
+                echo "🔍 Running Semgrep SAST scan..."
+                sh '''
+                docker run --rm -v $(pwd):/src -w /src semgrep/semgrep semgrep \
+                  --config=auto \
+                  --json \
+                  --output semgrep-report.json || true
+                '''
+                archiveArtifacts artifacts: 'semgrep-report.json', fingerprint: true
             }
         }
 
