@@ -6,7 +6,7 @@ pipeline {
     }
 
     environment {
-        WORKDIR = "${WORKSPACE}/app"
+        WORKDIR = "${WORKSPACE}"               // ✔️ Correct directory
         DEFECTDOJO_URL = "http://host.docker.internal:8082"
         DEFECTDOJO_API_KEY = credentials('defectdojo_api_token')
         DEFECTDOJO_PRODUCT_NAME = "OWASP Juice Shop Pipeline"
@@ -18,126 +18,152 @@ pipeline {
             steps {
                 echo "📦 Cloning repository..."
                 sh '''
-                rm -rf app || true
-                git clone https://github.com/SadhuDhvanil/DevSecOps-Secure-CICD-Pipeline.git app
-                ls -la app
+                rm -rf repo || true
+                git clone https://github.com/SadhuDhvanil/DevSecOps-Secure-CICD-Pipeline.git repo
+                ls -la repo
                 '''
             }
         }
 
+        // ---------- BUILD ----------
         stage('Build (npm install)') {
-             steps {
-                echo "⚙️ Installing backend dependencies (Node 22)..."
-                sh """
-                docker run --rm \
-                -v "$WORKSPACE/app":/app \
-                -w /app \
-                node:22 bash -c "npm install --legacy-peer-deps"
-                """
-             }
-       }
-
-      stage('SAST - Semgrep') {  
-          steps {
-                echo "🔍 Running Semgrep scan..."
-                dir('app') {
-                    sh '''
-                    docker run --rm \
-                      -v "$PWD":/src -w /src \
-                      semgrep/semgrep semgrep \
-                        --config=auto \
-                        --json \
-                        --output semgrep-report.json || true
-
-                    # guarantee file exists
-                    [ ! -f semgrep-report.json ] && echo '{}' > semgrep-report.json
-                    '''
-                }
-                archiveArtifacts artifacts: 'app/semgrep-report.json', fingerprint: true
-            }
-        }
-
-        stage('SCA - Trivy FS Scan') {
             steps {
-                echo "🧰 Running Trivy filesystem scan..."
+                echo "⚙️ Installing backend dependencies (Node 22)..."
                 sh '''
+                cd repo
                 docker run --rm \
-                  -v "$WORKDIR":/src \
-                  aquasec/trivy fs /src \
-                  --format json \
-                  --output /src/trivy-fs-report.json || true
+                  -v "$PWD":/workspace \
+                  -w /workspace \
+                  node:22 bash -c "npm install --legacy-peer-deps"
                 '''
-                archiveArtifacts artifacts: 'app/trivy-fs-report.json', fingerprint: true
             }
         }
 
+        // ---------- SAST ----------
+        stage('SAST - Semgrep') {
+            steps {
+                echo "🔍 Running Semgrep scan..."
+                sh '''
+                cd repo
+                docker run --rm \
+                  -v "$PWD":/src -w /src \
+                  semgrep/semgrep semgrep \
+                    --config=auto \
+                    --json \
+                    --output semgrep-report.json || true
+
+                # Ensure report exists
+                if [ ! -f repo/semgrep-report.json ]; then echo "{}" > repo/semgrep-report.json; fi
+                '''
+                archiveArtifacts artifacts: "repo/semgrep-report.json", fingerprint: true
+            }
+        }
+
+        // ---------- SCA ----------
+        stage('SCA - Trivy (Filesystem Scan)') {
+            steps {
+                echo "📦 Running Trivy FS Scan..."
+                sh '''
+                cd repo
+                docker run --rm \
+                  -v "$PWD":/workspace \
+                  aquasec/trivy fs /workspace \
+                  --format json \
+                  --output trivy-fs-report.json || true
+                '''
+                archiveArtifacts artifacts: "repo/trivy-fs-report.json", fingerprint: true
+            }
+        }
+
+        // ---------- SECRETS ----------
         stage('Secrets Scan - Gitleaks') {
             steps {
                 echo "🔑 Running Gitleaks..."
                 sh '''
+                cd repo
                 docker run --rm \
-                  -v "$WORKDIR":/repo \
+                  -v "$PWD":/workspace \
                   zricethezav/gitleaks detect \
-                    --source=/repo \
+                    --source=/workspace \
                     --report-format json \
-                    --report-path /repo/gitleaks-report.json || true
+                    --report-path gitleaks-report.json || true
                 '''
-                archiveArtifacts artifacts: 'app/gitleaks-report.json', fingerprint: true
+                archiveArtifacts artifacts: "repo/gitleaks-report.json", fingerprint: true
             }
         }
 
+        // ---------- START JUICE SHOP ----------
         stage('Run Juice Shop') {
             steps {
-                echo "🚀 Starting Juice Shop container..."
+                echo "🚀 Starting Juice Shop..."
                 sh '''
                 docker rm -f juice-shop || true
                 docker run -d -p 3000:3000 --name juice-shop bkimminich/juice-shop
-                sleep 15
+                sleep 20
                 '''
             }
         }
 
-        stage('DAST - ZAP Baseline Scan') {
+        // ---------- DAST ----------
+        stage('DAST - OWASP ZAP') {
             steps {
-                echo "🕷️ Running OWASP ZAP baseline..."
-                dir('app') {
-                    sh '''
-                    docker run --rm \
-                      -v "$PWD":/zap/wrk \
-                      owasp/zap2docker-stable zap-baseline.py \
-                        -t http://host.docker.internal:3000 \
-                        -r zap-report.html || true
-                    '''
-                }
-
+                echo "🕷️ Running ZAP Baseline Scan..."
+                sh '''
+                cd repo
+                docker run --rm \
+                  -v "$PWD":/zap \
+                  owasp/zap2docker-stable zap-baseline.py \
+                    -t http://host.docker.internal:3000 \
+                    -r zap-report.html || true
+                '''
                 publishHTML(target: [
-                    reportDir: "app",
+                    reportDir: "repo",
                     reportFiles: "zap-report.html",
                     reportName: "OWASP ZAP Report"
                 ])
             }
         }
 
-        stage('Upload ZAP Report to DefectDojo') {
+        // ---------- DEFECTDOJO ----------
+        stage('Upload to DefectDojo') {
             steps {
-                echo "📡 Uploading report to DefectDojo..."
-                dir('app') {
-                    sh '''
-                    if [ -f zap-report.html ]; then
-                      curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
-                        -H "Authorization: Token $DEFECTDOJO_API_KEY" \
-                        -F "scan_type=ZAP Scan" \
-                        -F "file=@zap-report.html" \
-                        -F "product_name=$DEFECTDOJO_PRODUCT_NAME" \
-                        -F "engagement_name=CI-CD Demo" \
-                        -F "scan_date=$(date +%Y-%m-%d)" \
-                        -F "active=true" \
-                        -F "verified=true" || true
-                    else
-                      echo "❗ zap-report.html missing — skipping upload"
-                    fi
-                    '''
-                }
+                echo "📡 Uploading reports to DefectDojo..."
+
+                sh '''
+                cd repo
+
+                echo "Uploading Semgrep..."
+                curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+                  -H "Authorization: Token $DEFECTDOJO_API_KEY" \
+                  -F scan_type="Semgrep JSON Report" \
+                  -F product_name="$DEFECTDOJO_PRODUCT_NAME" \
+                  -F engagement_name="CI-CD Demo" \
+                  -F file=@semgrep-report.json || true
+
+                echo "Uploading Trivy..."
+                curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+                  -H "Authorization: Token $DEFECTDOJO_API_KEY" \
+                  -F scan_type="Trivy Scan" \
+                  -F product_name="$DEFECTDOJO_PRODUCT_NAME" \
+                  -F engagement_name="CI-CD Demo" \
+                  -F file=@trivy-fs-report.json || true
+
+                echo "Uploading Gitleaks..."
+                curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+                  -H "Authorization: Token $DEFECTDOJO_API_KEY" \
+                  -F scan_type="Gitleaks Scan" \
+                  -F product_name="$DEFECTDOJO_PRODUCT_NAME" \
+                  -F engagement_name="CI-CD Demo" \
+                  -F file=@gitleaks-report.json || true
+
+                echo "Uploading ZAP..."
+                curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+                  -H "Authorization: Token $DEFECTDOJO_API_KEY" \
+                  -F scan_type="ZAP Scan" \
+                  -F product_name="$DEFECTDOJO_PRODUCT_NAME" \
+                  -F engagement_name="CI-CD Demo" \
+                  -F file=@zap-report.html || true
+                '''
             }
         }
     }
