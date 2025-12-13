@@ -25,19 +25,17 @@ pipeline {
             }
         }
 
-        // ---------- BUILD ----------
-        stage('Build (npm install)') {
-            steps {
-                echo "⚙️ Installing backend dependencies (Node 22)..."
-                sh '''
-                cd repo
-                docker run --rm \
-                  -v "$PWD":/workspace \
-                  -w /workspace \
-                  node:22 bash -c "npm install --legacy-peer-deps"
-                '''
-            }
-        }
+stage('Build (npm install)') {
+    steps {
+        echo "⚙️ Installing backend dependencies (Node 22)..."
+        sh '''
+            docker run --rm \
+                -v "$WORKSPACE":/app \
+                -w /app \
+                node:22 bash -c "npm install --legacy-peer-deps"
+        '''
+    }
+}
 
         // ---------- SAST ----------
         stage('SAST - Semgrep') {
