@@ -25,20 +25,20 @@ pipeline {
             }
         }
 
-stage('Build (npm install)') {
-    steps {
-        echo "⚙️ Installing backend dependencies (Node 22)..."
-        sh """
-        docker run --rm \
-          -v "$WORKSPACE":/workspace \
-          -w /workspace \
-          node:22 bash -c "npm install --legacy-peer-deps"
-        """
-    }
-}
+        stage('Build (npm install)') {
+             steps {
+                echo "⚙️ Installing backend dependencies (Node 22)..."
+                sh """
+                docker run --rm \
+                -v "$WORKSPACE/app":/app \
+                -w /app \
+                node:22 bash -c "npm install --legacy-peer-deps"
+                """
+             }
+       }
 
-        stage('SAST - Semgrep') {
-            steps {
+      stage('SAST - Semgrep') {  
+          steps {
                 echo "🔍 Running Semgrep scan..."
                 dir('app') {
                     sh '''
