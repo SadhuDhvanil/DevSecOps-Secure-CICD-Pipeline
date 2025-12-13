@@ -12,27 +12,14 @@ pipeline {
         DEFECTDOJO_PRODUCT_NAME = "OWASP Juice Shop Pipeline"
     }
 
-    stages {
-
-        stage('Checkout Code') {
-            steps {
-                echo "📦 Cloning repository..."
-                sh '''
-                rm -rf repo || true
-                git clone https://github.com/SadhuDhvanil/DevSecOps-Secure-CICD-Pipeline.git repo
-                ls -la repo
-                '''
-            }
-        }
-
 stage('Build (npm install)') {
     steps {
-        echo "⚙️ Installing backend dependencies (Node 22)..."
+        echo "Installing Node dependencies..."
         sh '''
-            docker run --rm \
-                -v "$WORKSPACE":/app \
-                -w /app \
-                node:22 bash -c "npm install --legacy-peer-deps"
+        docker run --rm \
+          -v "$WORKSPACE":/app \
+          -w /app \
+          node:22 bash -lc "npm install --legacy-peer-deps"
         '''
     }
 }
